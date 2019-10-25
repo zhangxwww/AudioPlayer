@@ -2,13 +2,13 @@
 .model flat,stdcall
 .stack 4096
 
-include winmm.inc
+include \masm32\include\winmm.inc
 include Irvine32.inc
 
 include PlayerKernel.inc
 
-includelib winmm.lib
-includelib masm32.lib
+includelib \masm32\lib\winmm.lib
+includelib \masm32\lib\masm32.lib
 includelib Irvine32.lib
 
 dw2a PROTO :DWORD, :DWORD
@@ -67,6 +67,9 @@ Init PROC
 Init ENDP
 
 LoadAudio PROC audioNameAddr:DWORD
+	mov	edx, audioNameAddr
+	call WriteString
+	call Crlf
 	invoke Str_copy, addr loadprefix_s, addr command_s
 	invoke Str_concat, addr command_s, audioNameAddr
 	invoke Str_concat, addr command_s, addr loadsuffix_s
