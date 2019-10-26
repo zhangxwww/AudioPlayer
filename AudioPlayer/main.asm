@@ -10,6 +10,7 @@ BrowseFile			equ <GetOpenFileName>						;用于打开文件对话框
 promptError			proto 										;错误提示
 SelectFile			proto										;用于打开文件对话框并存储文件名字符串
 GetPosFromPerc		proto perc:DWORD							;用于从百分比获取播放进度
+GetVolumeFromPerc   proto perc:DWORD
 GetPercFromPos		proto pos:DWORD								;用于从进度获取百分比
 atodw				PROTO :DWORD								
 StringToInt			equ <atodw>
@@ -45,6 +46,7 @@ ButtonClassName 	BYTE "button", 0
 EditClassName 		BYTE "edit", 0
 TrackbarClassName 	BYTE "msctls_trackbar32", 0
 
+
 errorwinTittle 	BYTE "Error", 0
 errorMsg 		BYTE "Error emerges", 0
 
@@ -54,14 +56,19 @@ ButtonPauseText BYTE "Pause", 0
 ButtonStopText  BYTE "Stop", 0
 
 szFilter		BYTE "Media Files", 0, "*.mp4;*.mp3;*.wav;*.m4a", 0
-szFileNameOpen	BYTE 512 DUP(0)
+;szFileNameOpen	BYTE 25600 DUP(0) ; 存储列表中的歌曲对应的FileName的数组，最多存50个FileName512，每个的长度最大为512
+szFileNameOpen BYTE 512 DUP(0)
+;historyFileCount BYTE 0 ; 列表中的歌曲数
 AudioOn			BYTE 0
 AudioLoaded		BYTE 0
 position_s     	BYTE 64 DUP(0)
+volume_s        BYTE 64 DUP(0)
 totalLen_s     	BYTE 64 DUP(0)
+totalVolume_S   BYTE 64 DUP(0)
 volume       	BYTE 64 DUP(0)
 totalLen		DWORD 0
 position		DWORD 0
+totalVolume     DWORD 0
 
 .data?
 hInstance 		HINSTANCE ?
@@ -71,6 +78,7 @@ ButtonPlay 	HWND ?
 ButtonStop  HWND ?
 hwndEdit 	HWND ?
 Trackbar	HWND ?
+Soundbar    HWND ?
 
 buffer 		BYTE  512 dup(?)	;缓冲区
 
@@ -80,7 +88,8 @@ EditID 			equ 1
 ButtonOpenID 	equ 2
 ButtonPlayID	equ 3
 ButtonStopID	equ 4
-TrackbarID		equ 5
+TrackbarID		equ 6
+SoundbarID      equ 5
 
 IDM_CLEAR 		equ 11
 IDM_EXIT 		equ 12
@@ -91,6 +100,7 @@ IDM_PAUSE		equ 16
 IDM_STOP		equ 17
 IDM_PROG		equ 18
 IDM_UPDATE		equ 19
+IDM_VOLUME      equ 20
 
 PlayTimerID		equ 51
 ElapsedTime		equ 1000
@@ -184,6 +194,11 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                         WS_CHILD or WS_VISIBLE or TBS_NOTICKS or TBS_TRANSPARENTBKGND,\
                         30,120,300,30,hWnd,TrackbarID,hInstance,NULL
 		mov  Trackbar, eax
+		;添加音量控制条
+		invoke CreateWindowEx, NULL, ADDR TrackbarClassName, NULL, \
+						WS_CHILD or WS_VISIBLE or TBS_NOTICKS or TBS_VERT or TBS_TRANSPARENTBKGND,\
+                        30,150,30,200,hWnd,SoundbarID,hInstance,NULL
+		mov  Soundbar, eax
 	.ELSEIF uMsg == WM_TIMER
 		invoke SendMessage, hWnd, WM_COMMAND, IDM_UPDATE, NULL
 	.ELSEIF uMsg == WM_HSCROLL
@@ -194,10 +209,21 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 			invoke SendMessage, hWnd, WM_COMMAND, IDM_PROG, eax
 			pop eax
 		.ENDIF
+	.ELSEIF uMsg == WM_VSCROLL
+		mov eax, wParam
+		.IF ax == TB_ENDTRACK
+			push eax
+			invoke SendMessage, Soundbar, TBM_GETPOS, 0, 0
+			invoke SendMessage, hWnd, WM_COMMAND,IDM_VOLUME, eax 
+			pop eax
+		.ENDIF
 	.ELSEIF uMsg == WM_COMMAND
 		mov eax, wParam
 		.IF ax == IDM_BROWSE
 			invoke StopAudio
+			push eax
+			mov eax, OFFSET volume
+			pop eax
 			invoke SelectFile
 			.IF szFileNameOpen != NULL
 				;设置文字
@@ -209,6 +235,12 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 				invoke GetTotalLength, ADDR totalLen_s, LENGTH totalLen_s
 				invoke StringToInt, ADDR totalLen_s
 				mov	   totalLen, eax
+				pop    eax
+				;获取音量
+				push   eax
+				invoke GetVolume, ADDR totalVolume_S, LENGTH totalVolume_S
+				invoke StringToInt, ADDR totalVolume_S
+				mov	   totalVolume, eax
 				pop    eax
 				;播放音频
 				invoke PlayAudio
@@ -262,6 +294,16 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 				pop  ebx
 				pop  eax
 			.ENDIF
+		.ELSEIF ax == IDM_VOLUME
+			push eax
+			push ebx
+			invoke GetVolumeFromPerc, lParam ;写这里！
+			mov ebx, eax
+			invoke SetVolume,ebx
+			invoke GetVolume, ADDR volume, LENGTH volume
+			pop ebx
+			mov eax, OFFSET volume
+			pop eax
 		.ELSEIF ax == IDM_UPDATE
 			.IF AudioLoaded == 1
 				push eax
@@ -335,6 +377,18 @@ GetPosFromPerc proc perc:DWORD
 	pop  ebx
 	ret
 GetPosFromPerc endp
+
+GetVolumeFromPerc proc perc:DWORD
+	push ebx
+	push edx
+	mov  eax, totalVolume
+	mul  perc
+	mov  ebx, 100
+	div  ebx
+	pop  edx
+	pop  ebx
+	ret
+GetVolumeFromPerc endp
 
 GetPercFromPos proc pos:DWORD
 	push ebx
