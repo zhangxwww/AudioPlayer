@@ -115,6 +115,8 @@ SetCurrentPosition ENDP
 
 GetTotalLength PROC returnAddr:DWORD, bufsize:DWORD
 	invoke Run_cmd_return, addr totalLength_s, returnAddr, bufsize
+	;mov edx, returnAddr
+	;call WriteString
 	ret
 GetTotalLength ENDP
 

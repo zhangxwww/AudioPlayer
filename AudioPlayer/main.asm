@@ -2,13 +2,17 @@
 .model flat,stdcall
 option casemap:none
 
-WinMain 			proto :DWORD,:DWORD,:DWORD,:DWORD			;主窗口过程
-MessageBoxA			proto :DWORD,:DWORD,:DWORD,:DWORD			;用于构建MessageBox
-MessageBox 			equ <MessageBoxA> 							;用于显示错误消息								
+WinMain 			proto :DWORD, :DWORD, :DWORD, :DWORD		;主窗口过程
+MessageBoxA			proto :DWORD, :DWORD, :DWORD, :DWORD		;用于构建MessageBox
+MessageBox 			equ <MessageBox> 							;用于显示错误消息								
 BrowseFolder		equ <SHBrowseForFolder>						;用于打开文件夹对话框
-BrowseFile			equ <GetOpenFileNameA>						;用于打开文件对话框
+BrowseFile			equ <GetOpenFileName>						;用于打开文件对话框
 promptError			proto 										;错误提示
 SelectFile			proto										;用于打开文件对话框并存储文件名字符串
+GetPosFromPerc		proto perc:DWORD							;用于从百分比获取播放进度
+GetPercFromPos		proto pos:DWORD								;用于从进度获取百分比
+atodw				PROTO :DWORD								
+StringToInt			equ <atodw>
 
 include 	\masm32\include\windows.inc
 include 	\masm32\include\user32.inc
@@ -35,22 +39,29 @@ includelib	\masm32\lib\ws2_32.lib
 includelib	\masm32\lib\winmm.lib
 
 .data
-ClassName 		BYTE "SimpleWinClass",0
-AppName  		BYTE "Audio Player",0
-ButtonClassName BYTE "button",0
-errorwinTittle 	BYTE "Error",0
-errorMsg 		BYTE "Error emerges",0
+ClassName 			BYTE "SimpleWinClass", 0
+AppName  			BYTE "Audio Player", 0
+ButtonClassName 	BYTE "button", 0
+EditClassName 		BYTE "edit", 0
+TrackbarClassName 	BYTE "msctls_trackbar32", 0
 
-ButtonOpenText 	BYTE "Open",0
-ButtonPlayText 	BYTE "Play",0
+errorwinTittle 	BYTE "Error", 0
+errorMsg 		BYTE "Error emerges", 0
+
+ButtonOpenText 	BYTE "Open", 0
+ButtonPlayText 	BYTE "Play", 0
 ButtonPauseText BYTE "Pause", 0
 ButtonStopText  BYTE "Stop", 0
-EditClassName 	BYTE "edit",0
 
 szFilter		BYTE "Media Files", 0, "*.mp4;*.mp3;*.wav;*.m4a", 0
 szFileNameOpen	BYTE 512 DUP(0)
 AudioOn			BYTE 0
 AudioLoaded		BYTE 0
+position_s     	BYTE 64 DUP(0)
+totalLen_s     	BYTE 64 DUP(0)
+volume       	BYTE 64 DUP(0)
+totalLen		DWORD 0
+position		DWORD 0
 
 .data?
 hInstance 		HINSTANCE ?
@@ -59,25 +70,30 @@ ButtonOpen 	HWND ?
 ButtonPlay 	HWND ?
 ButtonStop  HWND ?
 hwndEdit 	HWND ?
-buffer 		BYTE  512 dup(?)	;输入表达式缓冲区
-result 		BYTE  512 dup(?)	;结果存储区域
+Trackbar	HWND ?
+
+buffer 		BYTE  512 dup(?)	;缓冲区
 
 .const
 
-EditID equ 10
+EditID 			equ 1
+ButtonOpenID 	equ 2
+ButtonPlayID	equ 3
+ButtonStopID	equ 4
+TrackbarID		equ 5
 
-ButtonOpenID 	equ 11
-ButtonPlayID	equ 12
-ButtonStopID	equ 13
+IDM_CLEAR 		equ 11
+IDM_EXIT 		equ 12
+IDM_APPEND 		equ 13
+IDM_BROWSE		equ 14
+IDM_PLAY		equ 15
+IDM_PAUSE		equ 16
+IDM_STOP		equ 17
+IDM_PROG		equ 18
+IDM_UPDATE		equ 19
 
-IDM_CLEAR 		equ 1
-IDM_EXIT 		equ 2
-IDM_APPEND 		equ 3
-IDM_BROWSE		equ 4
-IDM_PLAY		equ 5
-IDM_PAUSE		equ 6
-IDM_STOP		equ 7
-
+PlayTimerID		equ 51
+ElapsedTime		equ 1000
 .code
 start:
 	invoke GetModuleHandle, NULL
@@ -163,43 +179,102 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                         WS_CHILD or WS_VISIBLE or BS_DEFPUSHBUTTON,\
                         210,75,80,30,hWnd,ButtonStopID,hInstance,NULL
 		mov  ButtonStop, eax
-
+		;添加进度条
+		invoke CreateWindowEx,NULL, ADDR TrackbarClassName,NULL,\
+                        WS_CHILD or WS_VISIBLE or TBS_NOTICKS or TBS_TRANSPARENTBKGND,\
+                        30,120,300,30,hWnd,TrackbarID,hInstance,NULL
+		mov  Trackbar, eax
+	.ELSEIF uMsg == WM_TIMER
+		invoke SendMessage, hWnd, WM_COMMAND, IDM_UPDATE, NULL
+	.ELSEIF uMsg == WM_HSCROLL
+		mov	eax, wParam
+		.IF ax == TB_ENDTRACK
+			push eax
+			invoke SendMessage, Trackbar, TBM_GETPOS, 0, 0
+			invoke SendMessage, hWnd, WM_COMMAND, IDM_PROG, eax
+			pop eax
+		.ENDIF
 	.ELSEIF uMsg == WM_COMMAND
 		mov eax, wParam
-		.IF lParam == 0
-			;指令处理区域
-			.IF ax == IDM_BROWSE
-				invoke StopAudio
-				invoke SelectFile
+		.IF ax == IDM_BROWSE
+			invoke StopAudio
+			invoke SelectFile
+			.IF szFileNameOpen != NULL
+				;设置文字
 				invoke SetWindowText, hwndEdit, ADDR szFileNameOpen
 				invoke SetWindowText, ButtonPlay, ADDR ButtonPauseText
 				invoke LoadAudio, ADDR szFileNameOpen
+				;获取总长度
+				push   eax
+				invoke GetTotalLength, ADDR totalLen_s, LENGTH totalLen_s
+				invoke StringToInt, ADDR totalLen_s
+				mov	   totalLen, eax
+				pop    eax
+				;播放音频
 				invoke PlayAudio
 				mov	AudioOn, 1
 				mov AudioLoaded, 1
-
-				;invoke BrowseFolder, ADDR folderpath
-			.ELSEIF ax == IDM_PLAY
-				.IF AudioOn == 0
-					.IF AudioLoaded == 0
-						invoke PlayAudio
-					.ELSE
-						invoke ResumeAudio
-					.ENDIF
-					invoke SetWindowText, ButtonPlay, ADDR ButtonPauseText
-					mov AudioOn, 1
+				;开启计时器
+				invoke SetTimer, hWnd, PlayTimerID, ElapsedTime, NULL
+			.ENDIF
+		.ELSEIF ax == IDM_PLAY
+			.IF AudioOn == 0 && AudioLoaded == 1
+				.IF AudioLoaded == 0
+					invoke PlayAudio
+					invoke SetTimer, hWnd, PlayTimerID, ElapsedTime, NULL
+				.ELSE
+					invoke ResumeAudio
+					invoke SetTimer, hWnd, PlayTimerID, ElapsedTime, NULL
 				.ENDIF
-			.ELSEIF ax == IDM_PAUSE
+				invoke SetWindowText, ButtonPlay, ADDR ButtonPauseText
+				mov AudioOn, 1
+			.ENDIF
+		.ELSEIF ax == IDM_PAUSE
+			.IF AudioLoaded == 1 && AudioOn == 1
 				invoke PauseAudio
+				invoke KillTimer, hWnd, PlayTimerID
 				invoke SetWindowText, ButtonPlay, ADDR ButtonPlayText
 				mov AudioOn, 0
-			.ELSEIF ax == IDM_STOP
-				invoke StopAudio
-				invoke SetWindowText, ButtonPlay, ADDR ButtonPlayText
-				mov AudioOn, 0
-				mov AudioLoaded, 0
-			.ELSE
-				invoke DestroyWindow,hWnd
+			.ENDIF
+		.ELSEIF ax == IDM_STOP
+			invoke StopAudio
+			.IF AudioLoaded == 1 && AudioOn == 1
+				invoke KillTimer, hWnd, PlayTimerID
+			.ENDIF
+			invoke SetWindowText, ButtonPlay, ADDR ButtonPlayText
+			invoke SetWindowText, hwndEdit, NULL
+			mov	szFileNameOpen, NULL
+			mov AudioOn, 0
+			mov AudioLoaded, 0
+		.ELSEIF ax == IDM_PROG
+			.IF AudioLoaded == 1
+				push eax
+				push ebx
+				invoke GetPosFromPerc, lParam
+				mov  ebx, eax
+				invoke SetCurrentPosition, ebx 
+				invoke GetCurrentPosition, ADDR position_s, LENGTH position_s
+				invoke StringToInt, ADDR position_s
+				.IF AudioOn == 0
+					invoke PauseAudio
+				.ENDIF
+				pop  ebx
+				pop  eax
+			.ENDIF
+		.ELSEIF ax == IDM_UPDATE
+			.IF AudioLoaded == 1
+				push eax
+				push edx
+				invoke GetCurrentPosition, ADDR position_s, LENGTH position_s
+				push   eax
+				invoke StringToInt, ADDR position_s
+				mov    position, eax
+				pop    eax
+				mov edx, position
+				invoke GetPercFromPos, edx
+				invoke SendMessage, Trackbar, TBM_SETPOS, TRUE, eax
+				pop edx
+				pop eax
 			.ENDIF
 		.ELSE
 			;按钮函数回调区域
@@ -247,5 +322,29 @@ SelectFile proc
 	pop		eax
 	ret
 SelectFile endp
+
+GetPosFromPerc proc perc:DWORD
+	push ebx
+	push edx
+	mov  eax, totalLen
+	mul  perc
+	mov  ebx, 100
+	div  ebx
+	pop  edx
+	pop  ebx
+	ret
+GetPosFromPerc endp
+
+GetPercFromPos proc pos:DWORD
+	push ebx
+	push edx
+	mov  eax, pos
+	mov  ebx, 100
+	mul  ebx
+	div  totalLen
+	pop  edx
+	pop  ebx
+	ret
+GetPercFromPos endp
 
 end start
