@@ -239,10 +239,9 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 		.ELSEIF ax == IDM_STOP
 			.IF AudioLoaded == 1 && AudioOn == 1
 				invoke KillTimer, hWnd, PlayTimerID
-				invoke SetCurrentPosition, 0
 				invoke SendMessage, Trackbar, TBM_SETPOS, TRUE, 0
 			.ENDIF
-			invoke StopAudio
+			invoke CloseAudio
 			invoke SetWindowText, ButtonPlay, ADDR ButtonPlayText
 			invoke SetWindowText, hwndEdit, NULL
 			mov	szFileNameOpen, NULL
