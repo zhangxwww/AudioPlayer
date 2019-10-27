@@ -50,35 +50,36 @@ TrackbarClassName 	BYTE "msctls_trackbar32", 0
 errorwinTittle 	BYTE "Error", 0
 errorMsg 		BYTE "Error emerges", 0
 
-ButtonOpenText 	BYTE "Open", 0
-ButtonPlayText 	BYTE "Play", 0
-ButtonPauseText BYTE "Pause", 0
-ButtonStopText  BYTE "Stop", 0
+ButtonOpenText 		BYTE "Open", 0
+ButtonPlayText 		BYTE "Play", 0
+ButtonPauseText		BYTE "Pause", 0
+ButtonStopText		BYTE "Stop", 0
+ButtonVolumeText	BYTE "Vol", 0
 
-szFilter		BYTE "Media Files", 0, "*.mp4;*.mp3;*.wav;*.m4a", 0
-;szFileNameOpen	BYTE 25600 DUP(0) ; 存储列表中的歌曲对应的FileName的数组，最多存50个FileName512，每个的长度最大为512
-szFileNameOpen BYTE 512 DUP(0)
-;historyFileCount BYTE 0 ; 列表中的歌曲数
-AudioOn			BYTE 0
-AudioLoaded		BYTE 0
-position_s     	BYTE 64 DUP(0)
-volume_s        BYTE 64 DUP(0)
-totalLen_s     	BYTE 64 DUP(0)
-totalVolume_S   BYTE 64 DUP(0)
-volume       	BYTE 64 DUP(0)
-totalLen		DWORD 0
-position		DWORD 0
-totalVolume     DWORD 0
+szFilter			BYTE "Media Files", 0, "*.mp4;*.mp3;*.wav;*.m4a", 0
+;szFileNameOpen		BYTE 25600 DUP(0) ; 存储列表中的歌曲对应的FileName的数组，最多存50个FileName512，每个的长度最大为512
+szFileNameOpen		BYTE 512 DUP(0)
+;historyFileCount	BYTE 0 ; 列表中的歌曲数
+AudioOn				BYTE 0
+AudioLoaded			BYTE 0
+position_s     		BYTE 64 DUP(0)
+volume_s			BYTE 64 DUP(0)
+totalLen_s     		BYTE 64 DUP(0)
+totalLen			DWORD 0
+position			DWORD 0
+volume				DWORD 0
+CurrentVolShow  	DWORD 0
 
 .data?
 hInstance 		HINSTANCE ?
 
-ButtonOpen 	HWND ?
-ButtonPlay 	HWND ?
-ButtonStop  HWND ?
-hwndEdit 	HWND ?
-Trackbar	HWND ?
-Soundbar    HWND ?
+ButtonOpen 		HWND ?
+ButtonPlay 		HWND ?
+ButtonStop		HWND ?
+ButtonVolume	HWND ?
+hwndEdit 		HWND ?
+Trackbar		HWND ?
+Soundbar		HWND ?
 
 buffer 		BYTE  512 dup(?)	;缓冲区
 
@@ -90,6 +91,8 @@ ButtonPlayID	equ 3
 ButtonStopID	equ 4
 TrackbarID		equ 6
 SoundbarID      equ 5
+ButtonVolumeID  equ 6
+totalVolume		equ 1000
 
 IDM_CLEAR 		equ 11
 IDM_EXIT 		equ 12
@@ -101,9 +104,11 @@ IDM_STOP		equ 17
 IDM_PROG		equ 18
 IDM_UPDATE		equ 19
 IDM_VOLUME      equ 20
+IDM_SHOWVOL 	equ 21
 
 PlayTimerID		equ 51
 ElapsedTime		equ 1000
+
 .code
 start:
 	invoke GetModuleHandle, NULL
@@ -189,16 +194,26 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                         WS_CHILD or WS_VISIBLE or BS_DEFPUSHBUTTON,\
                         210,75,80,30,hWnd,ButtonStopID,hInstance,NULL
 		mov  ButtonStop, eax
+		invoke CreateWindowEx,NULL, ADDR ButtonClassName,ADDR ButtonVolumeText,\
+                        WS_CHILD or WS_VISIBLE or BS_PUSHBUTTON,\
+                        325,115,50,30,hWnd,ButtonVolumeID,hInstance,NULL
+		mov  ButtonVolume, eax
 		;添加进度条
 		invoke CreateWindowEx,NULL, ADDR TrackbarClassName,NULL,\
                         WS_CHILD or WS_VISIBLE or TBS_NOTICKS or TBS_TRANSPARENTBKGND,\
-                        30,120,300,30,hWnd,TrackbarID,hInstance,NULL
+                        20,120,300,30,hWnd,TrackbarID,hInstance,NULL
 		mov  Trackbar, eax
 		;添加音量控制条
 		invoke CreateWindowEx, NULL, ADDR TrackbarClassName, NULL, \
 						WS_CHILD or WS_VISIBLE or TBS_NOTICKS or TBS_VERT or TBS_TRANSPARENTBKGND,\
-                        30,150,30,200,hWnd,SoundbarID,hInstance,NULL
+                        345,30,30,80,hWnd,SoundbarID,hInstance,NULL
 		mov  Soundbar, eax
+		;初始化音量控制条位置、是否可见
+		invoke SendMessage, Soundbar, TBM_SETPOS, TRUE, 0
+		invoke ShowWindow, Soundbar, SW_HIDE
+
+		;变量初始化
+		mov volume, 100
 	.ELSEIF uMsg == WM_TIMER
 		invoke SendMessage, hWnd, WM_COMMAND, IDM_UPDATE, NULL
 	.ELSEIF uMsg == WM_HSCROLL
@@ -237,11 +252,7 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 				mov	   totalLen, eax
 				pop    eax
 				;获取音量
-				push   eax
-				invoke GetVolume, ADDR totalVolume_S, LENGTH totalVolume_S
-				invoke StringToInt, ADDR totalVolume_S
-				mov	   totalVolume, eax
-				pop    eax
+				invoke SetVolume, volume
 				;播放音频
 				invoke PlayAudio
 				mov	AudioOn, 1
@@ -295,15 +306,14 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 				pop  eax
 			.ENDIF
 		.ELSEIF ax == IDM_VOLUME
-			push eax
-			push ebx
-			invoke GetVolumeFromPerc, lParam ;写这里！
-			mov ebx, eax
-			invoke SetVolume,ebx
-			invoke GetVolume, ADDR volume, LENGTH volume
-			pop ebx
-			mov eax, OFFSET volume
-			pop eax
+			push 	eax
+			push 	ebx
+			invoke 	GetVolumeFromPerc, lParam
+			mov 	ebx, eax
+			mov  	volume, ebx
+			invoke 	SetVolume, ebx
+			pop 	ebx
+			pop 	eax
 		.ELSEIF ax == IDM_UPDATE
 			.IF AudioLoaded == 1
 				push eax
@@ -318,6 +328,19 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 				invoke SendMessage, Trackbar, TBM_SETPOS, TRUE, eax
 				pop edx
 				pop eax
+			.ENDIF
+		.ELSEIF ax == IDM_SHOWVOL
+			.IF CurrentVolShow == 0
+				invoke ShowWindow, Soundbar, SW_SHOW
+				push   eax
+				invoke GetVolume, ADDR volume_s, LENGTH volume_s
+				invoke StringToInt, ADDR volume_s
+				mov	   volume, eax
+				pop    eax
+				mov	   CurrentVolShow, 1
+			.ELSE
+				invoke ShowWindow, Soundbar, SW_HIDE
+				mov	   CurrentVolShow, 0
 			.ENDIF
 		.ELSE
 			;按钮函数回调区域
@@ -339,6 +362,11 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 				shr eax,16
 				.IF ax==BN_CLICKED
 					invoke SendMessage, hWnd, WM_COMMAND, IDM_STOP, 0
+				.ENDIF
+			.ELSEIF ax == ButtonVolumeID
+				shr eax,16
+				.IF ax==BN_CLICKED
+					invoke SendMessage, hWnd, WM_COMMAND, IDM_SHOWVOL, 0
 				.ENDIF
 			.ENDIF
 		.ENDIF
@@ -380,11 +408,15 @@ GetPosFromPerc endp
 
 GetVolumeFromPerc proc perc:DWORD
 	push ebx
+	push ecx
 	push edx
 	mov  eax, totalVolume
-	mul  perc
+	mov  ecx, 100
+	sub  ecx, perc
+	mul  ecx
 	mov  ebx, 100
 	div  ebx
+	pop  edx
 	pop  edx
 	pop  ebx
 	ret
