@@ -47,8 +47,8 @@ EditClassName 		BYTE "edit", 0
 TrackbarClassName 	BYTE "msctls_trackbar32", 0
 
 
-errorwinTittle 	BYTE "Error", 0
-errorMsg 		BYTE "Error emerges", 0
+errorwinTittle 		BYTE "Error", 0
+errorMsg 			BYTE "Error emerges", 0
 
 ButtonOpenText 		BYTE "Open", 0
 ButtonPlayText 		BYTE "Play", 0
@@ -56,12 +56,12 @@ ButtonPauseText		BYTE "Pause", 0
 ButtonStopText		BYTE "Stop", 0
 ButtonVolumeText	BYTE "Vol", 0
 
-szFilter			BYTE "Media Files", 0, "*.mp4;*.mp3;*.wav;*.m4a", 0
+szFilter			BYTE "Media Files", 0, "*.mp3;*.wav", 0
 ;szFileNameOpen		BYTE 25600 DUP(0) ; 存储列表中的歌曲对应的FileName的数组，最多存50个FileName512，每个的长度最大为512
 szFileNameOpen		BYTE 512 DUP(0)
 ;historyFileCount	BYTE 0 ; 列表中的歌曲数
-AudioOn				BYTE 0
-AudioLoaded			BYTE 0
+AudioOn				DWORD 0
+AudioLoaded			DWORD 0
 position_s     		BYTE 64 DUP(0)
 volume_s			BYTE 64 DUP(0)
 totalLen_s     		BYTE 64 DUP(0)
@@ -213,7 +213,7 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 		invoke ShowWindow, Soundbar, SW_HIDE
 
 		;变量初始化
-		mov volume, 100
+		mov volume, 1000
 	.ELSEIF uMsg == WM_TIMER
 		invoke SendMessage, hWnd, WM_COMMAND, IDM_UPDATE, NULL
 	.ELSEIF uMsg == WM_HSCROLL
@@ -251,7 +251,7 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 				invoke StringToInt, ADDR totalLen_s
 				mov	   totalLen, eax
 				pop    eax
-				;获取音量
+				;设置音量
 				invoke SetVolume, volume
 				;播放音频
 				invoke PlayAudio
