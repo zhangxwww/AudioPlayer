@@ -2,14 +2,14 @@
 .model flat,stdcall
 .stack 4096
 
-include \masm32\include\winmm.inc
 include Irvine32.inc
+includelib Irvine32.lib
+include \masm32\include\winmm.inc
 
 include PlayerKernel.inc
 
 includelib \masm32\lib\winmm.lib
 includelib \masm32\lib\masm32.lib
-includelib Irvine32.lib
 
 dw2a PROTO :DWORD, :DWORD
 
