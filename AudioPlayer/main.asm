@@ -12,7 +12,11 @@ SelectFile			proto										;用于打开文件对话框并存储文件名字符
 GetPosFromPerc		proto perc:DWORD							;用于从百分比获取播放进度
 GetVolumeFromPerc   proto perc:DWORD
 GetPercFromPos		proto pos:DWORD								;用于从进度获取百分比
-copystring          proto :DWORD, :DWORD
+GotoPrevSong        proto :DWORD                                ;播放上一首歌曲
+GotoNextSong        proto :DWORD                                ;播放下一首歌曲
+PlayAnotherSong     proto :DWORD,:DWORD                         ;播放另一首歌曲
+RepaintPlayList     proto		                                ;绘制播放列表
+copystring          proto :DWORD,:DWORD
 atodw				PROTO :DWORD								
 StringToInt			equ <atodw>
 
@@ -28,7 +32,6 @@ include		\masm32\include\netapi32.inc
 include		\masm32\include\ws2_32.inc
 include		\masm32\include\winmm.inc
 include		PlayerKernel.inc
-;include     Irvine32.inc
 
 includelib 	\masm32\lib\user32.lib
 includelib 	\masm32\lib\kernel32.lib
@@ -47,6 +50,7 @@ ClassName 			BYTE "SimpleWinClass", 0
 AppName  			BYTE "Audio Player", 0
 ButtonClassName 	BYTE "button", 0
 EditClassName 		BYTE "edit", 0
+ListBoxClassName    BYTE "listbox", 0
 TrackbarClassName 	BYTE "msctls_trackbar32", 0
 
 
@@ -62,11 +66,17 @@ ButtonModeText0     BYTE "LOOP", 0
 ButtonModeText1     BYTE "RANDOM", 0
 ButtonNextsongText  BYTE "Next song", 0
 ButtonPrevsongText  BYTE "Prev song", 0
+LoadFailureTitle    BYTE "Warning", 0
+LoadFailureText     BYTE "Failed to load the selected audio file!", 0
+
+maxFileNum          equ 3
+maxFileNameLength   equ 512
 
 szFilter			BYTE "Media Files", 0, "*.mp3;*.wav", 0
-szFileNameList		BYTE 25600 DUP(0) ; 存储列表中的歌曲对应的FileName的数组，最多存50个FileName，每个的长度最大为512
-szFileNameOpen		BYTE 512 DUP(0)
-szFileNum           DWORD 0 ; 列表中的歌曲数(最大为50)
+szFileNameList		BYTE maxFileNum*maxFileNameLength DUP(0) ; 存储列表中的歌曲对应的FileName的数组，最多存maxFileNum个FileName，每个的长度最大为maxFileNameLength
+szFileNameOpen		BYTE maxFileNameLength DUP(0)
+szFileNameToDisplay BYTE maxFileNameLength DUP(0)
+szFileNum           DWORD 0 ; 列表中的歌曲数(最大为maxFileNum)
 szFilePos           DWORD 0 ; 正在播放列表的哪一首(若列表中有歌曲，该值最小为1)
 AudioOn				DWORD 0
 AudioLoaded			DWORD 0
@@ -78,6 +88,9 @@ position			DWORD 0
 volume				DWORD 0
 CurrentVolShow  	DWORD 0
 mode                DWORD 0 ; 存储音乐播放模式 ; 0为循环播放; 1为随机播放
+
+
+DEBUG           DWORD 1
 
 .data?
 hInstance 		HINSTANCE ?
@@ -92,6 +105,7 @@ ButtonMode      HWND ?
 hwndEdit 		HWND ?
 Trackbar		HWND ?
 Soundbar		HWND ?
+PlayList        HWND ?
 
 buffer 		BYTE  512 dup(?)	;缓冲区
 
@@ -125,7 +139,11 @@ IDM_PREVSONG    equ 23
 IDM_NEXTSONG    equ 24
 
 PlayTimerID		equ 51
+PlayListID      equ 52
 ElapsedTime		equ 1000
+
+PlayAnotherSong_and_DoNothing equ 0
+PlayAnotherSong_and_AddToList equ 1   
 
 .code
 start:
@@ -156,7 +174,7 @@ WinMain proc hInst:HINSTANCE,hPrevInst:HINSTANCE,CmdLine:LPSTR,CmdShow:DWORD
 	;创建主窗口
 	invoke CreateWindowEx,WS_EX_CLIENTEDGE,ADDR ClassName,ADDR AppName,\
            WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,\
-           CW_USEDEFAULT,400,400,NULL,NULL,\
+           CW_USEDEFAULT,400,600,NULL,NULL,\
            hInstance,NULL
 	mov   hwnd,eax
 	invoke ShowWindow, hwnd,SW_SHOWNORMAL
@@ -174,15 +192,9 @@ WinMain proc hInst:HINSTANCE,hPrevInst:HINSTANCE,CmdLine:LPSTR,CmdShow:DWORD
 WinMain endp
 
 promptError proc
-	push eax
-	push ebx
-	push ecx
-	push edx
+	pushad
 	invoke MessageBox,NULL,ADDR errorMsg,ADDR errorwinTittle,MB_OK
-	pop edx
-	pop ecx
-	pop ebx
-	pop eax
+	popad
 	ret
 promptError	endp
 
@@ -228,7 +240,11 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                         WS_CHILD or WS_VISIBLE or BS_DEFPUSHBUTTON,\
                         210,155,80,30,hWnd,ButtonNextsongID,hInstance,NULL
 		mov  ButtonNextsong, eax
-		
+		;添加播放列表
+		invoke CreateWindowEx, NULL, ADDR ListBoxClassName, NULL, \
+						WS_CHILD or WS_VISIBLE or WS_BORDER or WS_VSCROLL,\
+                        20,195,300,200,hWnd,PlayListID,hInstance,NULL
+		mov PlayList, eax
 		;添加进度条
 		invoke CreateWindowEx,NULL, ADDR TrackbarClassName,NULL,\
                         WS_CHILD or WS_VISIBLE or TBS_NOTICKS or TBS_TRANSPARENTBKGND,\
@@ -266,70 +282,9 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 		mov eax, wParam
 		.IF ax == IDM_BROWSE
 			invoke StopAudio
-			push eax
-			mov eax, OFFSET volume
-			pop eax
 			invoke SelectFile
 			.IF szFileNameOpen != NULL
-				;关闭之前音频
-				invoke KillTimer, hWnd, PlayTimerID
-				invoke CloseAudio
-				;设置文字
-				invoke SetWindowText, hwndEdit, ADDR szFileNameOpen
-				invoke SetWindowText, ButtonPlay, ADDR ButtonPauseText
-				invoke LoadAudio, ADDR szFileNameOpen
-				;获取总长度
-				push   eax
-				invoke GetTotalLength, ADDR totalLen_s, LENGTH totalLen_s
-				invoke StringToInt, ADDR totalLen_s
-				mov	   totalLen, eax
-				pop    eax
-				;设置音量
-				invoke SetVolume, volume
-				;播放音频
-				invoke PlayAudio
-				mov	AudioOn, 1
-				mov AudioLoaded, 1
-				;开启计时器
-				invoke SetTimer, hWnd, PlayTimerID, ElapsedTime, NULL	
-				;修改播放列表信息
-				.IF szFileNum == 50
-					push ecx
-					push ebx
-					push edx
-					mov ecx, 49
-					mov ebx, OFFSET szFileNameList ; address of source
-					mov edx, ebx ; address of destination
-					add ebx, 512
-					L1:
-						invoke copystring, ebx, edx
-						add ebx, 512
-						add edx, 512
-						loop L1
-					invoke copystring, ADDR szFileNameOpen, edx
-					mov szFilePos, 50
-					pop edx
-					pop ebx
-					pop ecx
-				.ELSE
-					push ecx
-					push ebx
-					mov ecx, szFileNum
-					mov ebx, OFFSET szFileNameList
-					cmp ecx, 0
-					je L3
-					L2:
-						add ebx, 512
-						loop L2
-					L3:
-					invoke copystring, addr szFileNameOpen, ebx
-					mov ecx, szFileNum
-					inc ecx
-					mov szFileNum, ecx
-					mov szFilePos, ecx
-					pop ebx
-					pop ecx
-				.ENDIF
+				invoke PlayAnotherSong, PlayAnotherSong_and_AddToList, hWnd
 			.ENDIF
 		.ELSEIF ax == IDM_PLAY
 			.IF AudioOn == 0 && AudioLoaded == 1
@@ -363,8 +318,6 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 			mov AudioLoaded, 0
 		.ELSEIF ax == IDM_PROG
 			.IF AudioLoaded == 1
-				push eax
-				push ebx
 				invoke GetPosFromPerc, lParam
 				mov  ebx, eax
 				invoke SetCurrentPosition, ebx 
@@ -373,144 +326,36 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 				.IF AudioOn == 0
 					invoke PauseAudio
 				.ENDIF
-				pop  ebx
-				pop  eax
 			.ENDIF
 		.ELSEIF ax == IDM_VOLUME
-			push 	eax
-			push 	ebx
 			invoke 	GetVolumeFromPerc, lParam
 			mov 	ebx, eax
 			mov  	volume, ebx
 			invoke 	SetVolume, ebx
-			pop 	ebx
-			pop 	eax
 		.ELSEIF ax == IDM_UPDATE
 			.IF AudioLoaded == 1
-				push eax
-				push edx
 				invoke GetCurrentPosition, ADDR position_s, LENGTH position_s
-				push   eax
 				invoke StringToInt, ADDR position_s
 				mov    position, eax
-				pop    eax
 				mov edx, position
 				invoke GetPercFromPos, edx
 				invoke SendMessage, Trackbar, TBM_SETPOS, TRUE, eax
-				pop edx
-				pop eax
 			.ENDIF
 		.ELSEIF ax == IDM_SHOWVOL
 			.IF CurrentVolShow == 0
 				invoke ShowWindow, Soundbar, SW_SHOW
-				push   eax
 				invoke GetVolume, ADDR volume_s, LENGTH volume_s
 				invoke StringToInt, ADDR volume_s
 				mov	   volume, eax
-				pop    eax
 				mov	   CurrentVolShow, 1
 			.ELSE
 				invoke ShowWindow, Soundbar, SW_HIDE
 				mov	   CurrentVolShow, 0
 			.ENDIF
 		.ELSEIF ax == IDM_PREVSONG
-			.IF szFileNum !=0
-				.IF szFilePos == 1
-					push eax
-					mov eax, szFileNum
-					mov szFilePos, eax
-					pop eax
-				.ELSE
-					push ecx
-					mov ecx, szFilePos
-					dec ecx
-					mov szFilePos, ecx
-					pop ecx
-				.ENDIF
-				;修改szFileNameOpen
-				push ecx
-				push edx
-				mov ecx, szFilePos
-				mov edx, OFFSET szFileNameList
-				sub edx, 512
-				L4:
-					add edx, 512
-					loop L4
-				invoke copystring, edx, ADDR szFileNameOpen
-				pop edx
-				pop ecx
-				;关闭之前的音频
-				invoke KillTimer, hWnd, PlayTimerID
-				invoke CloseAudio
-				;设置文字
-				invoke SetWindowText, hwndEdit, ADDR szFileNameOpen
-				invoke SetWindowText, ButtonPlay, ADDR ButtonPauseText
-				invoke LoadAudio, ADDR szFileNameOpen
-				;获取总长度
-				push   eax
-				invoke GetTotalLength, ADDR totalLen_s, LENGTH totalLen_s
-				invoke StringToInt, ADDR totalLen_s
-				mov	   totalLen, eax
-				pop    eax
-				;设置音量
-				invoke SetVolume, volume
-				;播放音频
-				invoke PlayAudio
-				mov	AudioOn, 1
-				mov AudioLoaded, 1
-				;开启计时器
-				invoke SetTimer, hWnd, PlayTimerID, ElapsedTime, NULL
-			.ENDIF
+			invoke GotoPrevSong, hWnd
 		.ELSEIF ax == IDM_NEXTSONG
-			.IF szFileNum != 0
-				push ecx
-				mov ecx, szFilePos
-				cmp ecx, szFileNum
-				pop ecx
-				jne L6
-				mov szFilePos, 1
-				jmp L7
-				L6:
-					push ecx
-					mov ecx, szFilePos
-					inc ecx
-					mov szFilePos, ecx
-					pop ecx
-				L7:
-				;修改szFileNameOpen
-				push ecx
-				push edx
-				mov ecx, szFilePos
-				mov edx, OFFSET szFileNameList
-				sub edx, 512
-				L5:
-					add edx, 512
-					loop L5
-				invoke copystring, edx, ADDR szFileNameOpen
-				pop edx
-				pop ecx
-				;关闭之前的音频
-				invoke KillTimer, hWnd, PlayTimerID
-				invoke CloseAudio
-				;设置文字
-				invoke SetWindowText, hwndEdit, ADDR szFileNameOpen
-				invoke SetWindowText, ButtonPlay, ADDR ButtonPauseText
-				invoke LoadAudio, ADDR szFileNameOpen
-				;获取总长度
-				push   eax
-				invoke GetTotalLength, ADDR totalLen_s, LENGTH totalLen_s
-				invoke StringToInt, ADDR totalLen_s
-				mov	   totalLen, eax
-				pop    eax
-				;设置音量
-				invoke SetVolume, volume
-				;播放音频
-				invoke PlayAudio
-				mov	AudioOn, 1
-				mov AudioLoaded, 1
-				;开启计时器
-				invoke SetTimer, hWnd, PlayTimerID, ElapsedTime, NULL
-			.ENDIF
+			invoke GotoNextSong, hWnd
 		.ELSEIF ax == IDM_CHANGEMODE
 			.IF mode == 0
 				mov mode, 1
@@ -570,9 +415,8 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 	ret
 WndProc endp
 
-SelectFile proc
+SelectFile proc uses eax
 	local 	@path:OPENFILENAME
-	push 	eax
 	invoke	RtlZeroMemory, ADDR @path, SIZEOF @path
 	mov		@path.lStructSize, SIZEOF @path
 	invoke	GetModuleHandle, NULL
@@ -582,49 +426,181 @@ SelectFile proc
 	mov     @path.nMaxFile, 128
 	mov     @path.Flags, OFN_FILEMUSTEXIST or OFN_HIDEREADONLY
 	invoke  BrowseFile, ADDR @path
-	pop		eax
 	ret
 SelectFile endp
 
-GetPosFromPerc proc perc:DWORD
-	push ebx
-	push edx
+GetPosFromPerc proc uses ebx edx perc:DWORD
 	mov  eax, totalLen
 	mul  perc
 	mov  ebx, 100
 	div  ebx
-	pop  edx
-	pop  ebx
 	ret
 GetPosFromPerc endp
 
-GetVolumeFromPerc proc perc:DWORD
-	push ebx
-	push ecx
-	push edx
+GetVolumeFromPerc proc uses ebx ecx edx perc:DWORD
 	mov  eax, totalVolume
 	mov  ecx, 100
 	sub  ecx, perc
 	mul  ecx
 	mov  ebx, 100
 	div  ebx
-	pop  edx
-	pop  edx
-	pop  ebx
 	ret
 GetVolumeFromPerc endp
 
-GetPercFromPos proc pos:DWORD
-	push ebx
-	push edx
+GetPercFromPos proc uses ebx edx pos:DWORD
 	mov  eax, pos
 	mov  ebx, 100
 	mul  ebx
 	div  totalLen
-	pop  edx
-	pop  ebx
 	ret
 GetPercFromPos endp
+
+GotoPrevSong proc uses ecx edx hWnd:DWORD
+	.IF szFileNum !=0
+		; 修改szFilePos
+		.IF szFilePos == 1
+			mov eax, szFileNum
+			mov szFilePos, eax
+		.ELSE
+			mov ecx, szFilePos
+			dec ecx
+			mov szFilePos, ecx
+		.ENDIF
+		;修改szFileNameOpen
+		mov ecx, szFilePos
+		mov edx, OFFSET szFileNameList
+		sub edx, maxFileNameLength
+		L4:
+			add edx, maxFileNameLength
+			loop L4
+		invoke copystring, edx, ADDR szFileNameOpen
+		;播放上一首
+		pushad
+		invoke PlayAnotherSong, PlayAnotherSong_and_DoNothing, hWnd
+		popad
+	.ENDIF
+	ret
+GotoPrevSong endp
+
+GotoNextSong proc uses ecx edx hWnd:DWORD
+	.IF szFileNum != 0
+		;修改szFilePos
+		mov ecx, szFilePos
+		cmp ecx, szFileNum
+		jne L6
+		mov szFilePos, 1
+		jmp L7
+		L6:
+			mov ecx, szFilePos
+			inc ecx
+			mov szFilePos, ecx
+		L7:
+		;修改szFileNameOpen
+		mov ecx, szFilePos
+		mov edx, OFFSET szFileNameList
+		sub edx, maxFileNameLength
+		L5:
+			add edx, maxFileNameLength
+			loop L5
+		invoke copystring, edx, ADDR szFileNameOpen
+		;播放下一首
+		pushad
+		invoke PlayAnotherSong, PlayAnotherSong_and_DoNothing, hWnd
+		popad
+	.ENDIF
+	ret
+GotoNextSong endp
+
+RepaintPlayList proc uses ecx edx edi
+	;先清空播放列表
+	mov eax, 1
+	.WHILE eax != LB_ERR
+		invoke SendMessage, PlayList, LB_DELETESTRING, 0, 0
+	.ENDW
+	;再重绘播放列表
+	mov ecx, 0
+	mov edx, OFFSET szFileNameList
+	sub edx, maxFileNameLength
+	L7:
+		add edx, maxFileNameLength
+		mov edi, OFFSET szFileNameToDisplay
+		invoke copystring, edx, edi
+		pushad
+		invoke SendMessage, PlayList, LB_ADDSTRING, 0, OFFSET szFileNameToDisplay
+		popad
+		inc ecx
+		cmp ecx, szFileNum
+		jb L7
+	ret
+RepaintPlayList endp
+
+
+PlayAnotherSong proc uses ecx edx ebx callback:DWORD, hWnd: DWORD
+	; 若callback为PlayAnotherSong_and_DoNothing，什么都不用做
+	; 若callback为PlayAnotherSong_and_AddToList，则在加载音频成功后将其添加到播放列表的末尾
+
+	;关闭之前的音频
+	invoke KillTimer, hWnd, PlayTimerID
+	invoke CloseAudio
+
+	;设置文字与加载音频
+	invoke SetWindowText, hwndEdit, ADDR szFileNameOpen
+	invoke SetWindowText, ButtonPlay, ADDR ButtonPauseText
+	invoke LoadAudio, ADDR szFileNameOpen
+	.IF eax != 0 ; 处理音频加载失败的情况
+		invoke MessageBox, hWnd, ADDR LoadFailureText, ADDR LoadFailureTitle, MB_OK
+		jmp quit
+	.ENDIF
+
+	;获取总长度
+	invoke GetTotalLength, ADDR totalLen_s, LENGTH totalLen_s
+	invoke StringToInt, ADDR totalLen_s
+	mov	   totalLen, eax
+	;设置音量
+	invoke SetVolume, volume
+	;播放音频
+	invoke PlayAudio
+	mov	AudioOn, 1
+	mov AudioLoaded, 1
+	;开启计时器
+	invoke SetTimer, hWnd, PlayTimerID, ElapsedTime, NULL
+
+	; 处理callback
+	.IF callback == PlayAnotherSong_and_AddToList
+		;修改播放列表信息
+		.IF szFileNum == maxFileNum
+			mov ecx, maxFileNum - 1
+			mov ebx, OFFSET szFileNameList
+			mov edx, ebx ; address of destination
+			add ebx, maxFileNameLength ; address of source
+			L1:
+				invoke copystring, ebx, edx
+				add ebx, maxFileNameLength
+				add edx, maxFileNameLength
+				loop L1
+			invoke copystring, ADDR szFileNameOpen, edx
+			mov szFilePos, maxFileNum
+		.ELSE
+			mov ecx, szFileNum
+			mov ebx, OFFSET szFileNameList
+			cmp ecx, 0
+			je L3
+			L2:
+				add ebx, maxFileNameLength
+				loop L2
+			L3:
+				invoke copystring, addr szFileNameOpen, ebx
+				mov ecx, szFileNum
+				inc ecx
+				mov szFileNum, ecx
+				mov szFilePos, ecx
+		.ENDIF
+	.ENDIF
+
+	quit:
+		invoke RepaintPlayList
+		ret
+PlayAnotherSong endp
 
 copystring proc uses esi edi source:DWORD, dest:DWORD
 	mov esi, source
@@ -636,6 +612,7 @@ copystring proc uses esi edi source:DWORD, dest:DWORD
 		inc edi
 		cmp byte ptr [esi], 0
 		jne Lx
+	mov byte ptr [edi], 0
 	ret
 copystring endp
 
