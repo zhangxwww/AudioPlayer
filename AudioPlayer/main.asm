@@ -16,9 +16,12 @@ GotoPrevSong        proto :DWORD                                ;播放上一首
 GotoNextSong        proto :DWORD                                ;播放下一首歌曲
 PlayAnotherSong     proto :DWORD,:DWORD                         ;播放另一首歌曲
 RepaintPlayList     proto		                                ;绘制播放列表
-copystring          proto :DWORD,:DWORD
-atodw				PROTO :DWORD								
+convertTimeToString proto :DWORD, :DWORD                        ;将ms格式的DWORD类型的时间转换成m:s格式的时间
+copystring          proto :DWORD,:DWORD                      ;将edx内存储的数字转换成字符串
+atodw				proto :DWORD								
 StringToInt			equ <atodw>
+dwtoa               proto :DWORD, :DWORD
+IntToString         equ <dwtoa>
 
 include 	\masm32\include\windows.inc
 include 	\masm32\include\user32.inc
@@ -84,6 +87,9 @@ position_s     		BYTE 64 DUP(0)
 volume_s			BYTE 64 DUP(0)
 totalLen_s     		BYTE 64 DUP(0)
 totalLen			DWORD 0
+CurrentTime_s       BYTE 64 DUP(0) ; 以m:s格式显示的当前已播放的时间
+TotalTime_s         BYTE 64 DUP(0) ; 以m:s格式显示的歌曲总时长
+timezero_s          BYTE "0:0", 0
 position			DWORD 0
 volume				DWORD 0
 CurrentVolShow  	DWORD 0
@@ -103,6 +109,8 @@ ButtonPrevsong  HWND ?
 ButtonVolume	HWND ?
 ButtonMode      HWND ?
 hwndEdit 		HWND ?
+TotalTime       HWND ?
+CurrentTime     HWND ?
 Trackbar		HWND ?
 Soundbar		HWND ?
 PlayList        HWND ?
@@ -121,22 +129,24 @@ ButtonVolumeID  equ 6
 ButtonModeID    equ 7
 ButtonPrevsongID equ 8
 ButtonNextsongID equ 9
+TotalTimeID     equ 10
+CurrentTimeID   equ 11
 totalVolume		equ 1000
 
-IDM_CLEAR 		equ 11
-IDM_EXIT 		equ 12
-IDM_APPEND 		equ 13
-IDM_BROWSE		equ 14
-IDM_PLAY		equ 15
-IDM_PAUSE		equ 16
-IDM_STOP		equ 17
-IDM_PROG		equ 18
-IDM_UPDATE		equ 19
-IDM_VOLUME      equ 20
-IDM_SHOWVOL 	equ 21
-IDM_CHANGEMODE  equ 22
-IDM_PREVSONG    equ 23
-IDM_NEXTSONG    equ 24
+IDM_CLEAR 		equ 21
+IDM_EXIT 		equ 22
+IDM_APPEND 		equ 23
+IDM_BROWSE		equ 24
+IDM_PLAY		equ 25
+IDM_PAUSE		equ 26
+IDM_STOP		equ 27
+IDM_PROG		equ 28
+IDM_UPDATE		equ 29
+IDM_VOLUME      equ 30
+IDM_SHOWVOL 	equ 31
+IDM_CHANGEMODE  equ 32
+IDM_PREVSONG    equ 33
+IDM_NEXTSONG    equ 34
 
 PlayTimerID		equ 51
 PlayListID      equ 52
@@ -203,7 +213,7 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 		invoke PostQuitMessage,NULL
 	;创建窗口时的初始化动作
 	.ELSEIF uMsg==WM_CREATE
-		;添加文本框
+		;添加当前播放的歌曲文本框
 		invoke Init
 		invoke CreateWindowEx,WS_EX_CLIENTEDGE, ADDR EditClassName,NULL,\
                         WS_CHILD or WS_VISIBLE or WS_BORDER or ES_LEFT or\
@@ -211,44 +221,53 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                         30,30,300,30,hWnd,EditID,hInstance,NULL
 		mov  hwndEdit, eax
 		invoke SetFocus, hwndEdit
+		;添加播放时间信息文本框
+		invoke CreateWindowEx, NULL, ADDR EditClassName, NULL, \
+						WS_CHILD or WS_VISIBLE or WS_BORDER or ES_CENTER, \
+						220, 70, 50, 25, hWnd, CurrentTimeID, hInstance, NULL
+		mov CurrentTime, eax
+		invoke CreateWindowEx, NULL, ADDR EditClassName, NULL, \
+						WS_CHILD or WS_VISIBLE or WS_BORDER or ES_CENTER, \
+						280, 70, 50, 25, hWnd, TotalTimeID, hInstance, NULL
+		mov TotalTime, eax
 		;添加按钮
 		invoke CreateWindowEx,NULL, ADDR ButtonClassName,ADDR ButtonOpenText,\
                         WS_CHILD or WS_VISIBLE or BS_DEFPUSHBUTTON,\
-                        30,75,80,30,hWnd,ButtonOpenID,hInstance,NULL
+                        30,110,80,30,hWnd,ButtonOpenID,hInstance,NULL
 		mov  ButtonOpen, eax
 		invoke CreateWindowEx,NULL, ADDR ButtonClassName,ADDR ButtonPlayText,\
                         WS_CHILD or WS_VISIBLE or BS_DEFPUSHBUTTON,\
-                        120,75,80,30,hWnd,ButtonPlayID,hInstance,NULL
+                        120,110,80,30,hWnd,ButtonPlayID,hInstance,NULL
 		mov  ButtonPlay, eax
 		invoke CreateWindowEx,NULL, ADDR ButtonClassName,ADDR ButtonStopText,\
                         WS_CHILD or WS_VISIBLE or BS_DEFPUSHBUTTON,\
-                        210,75,80,30,hWnd,ButtonStopID,hInstance,NULL
+                        210,110,80,30,hWnd,ButtonStopID,hInstance,NULL
 		mov  ButtonStop, eax
 		invoke CreateWindowEx,NULL, ADDR ButtonClassName,ADDR ButtonVolumeText,\
                         WS_CHILD or WS_VISIBLE or BS_PUSHBUTTON,\
-                        325,115,50,30,hWnd,ButtonVolumeID,hInstance,NULL
+                        325,110,50,30,hWnd,ButtonVolumeID,hInstance,NULL
 		mov  ButtonVolume, eax
 		invoke CreateWindowEx, NULL, ADDR ButtonClassName, ADDR ButtonModeText0, \
                         WS_CHILD or WS_VISIBLE or BS_DEFPUSHBUTTON,\
-                        30,155,80,30,hWnd,ButtonModeID,hInstance,NULL
+                        30,150,80,30,hWnd,ButtonModeID,hInstance,NULL
 		mov  ButtonMode, eax	
 		invoke CreateWindowEx, NULL, ADDR ButtonClassName, ADDR ButtonPrevsongText, \
                         WS_CHILD or WS_VISIBLE or BS_DEFPUSHBUTTON,\
-                        120,155,80,30,hWnd,ButtonPrevsongID,hInstance,NULL
+                        120,150,80,30,hWnd,ButtonPrevsongID,hInstance,NULL
 		mov  ButtonPrevsong, eax
 		invoke CreateWindowEx, NULL, ADDR ButtonClassName, ADDR ButtonNextsongText, \
                         WS_CHILD or WS_VISIBLE or BS_DEFPUSHBUTTON,\
-                        210,155,80,30,hWnd,ButtonNextsongID,hInstance,NULL
+                        210,150,80,30,hWnd,ButtonNextsongID,hInstance,NULL
 		mov  ButtonNextsong, eax
 		;添加播放列表
 		invoke CreateWindowEx, NULL, ADDR ListBoxClassName, NULL, \
 						WS_CHILD or WS_VISIBLE or WS_BORDER or WS_VSCROLL,\
-                        20,195,300,200,hWnd,PlayListID,hInstance,NULL
+                        20,190,300,200,hWnd,PlayListID,hInstance,NULL
 		mov PlayList, eax
 		;添加进度条
 		invoke CreateWindowEx,NULL, ADDR TrackbarClassName,NULL,\
                         WS_CHILD or WS_VISIBLE or TBS_NOTICKS or TBS_TRANSPARENTBKGND,\
-                        20,120,300,30,hWnd,TrackbarID,hInstance,NULL
+                        30,70,180,30,hWnd,TrackbarID,hInstance,NULL
 		mov  Trackbar, eax
 		;添加音量控制条
 		invoke CreateWindowEx, NULL, ADDR TrackbarClassName, NULL, \
@@ -337,6 +356,13 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 				invoke GetCurrentPosition, ADDR position_s, LENGTH position_s
 				invoke StringToInt, ADDR position_s
 				mov    position, eax
+				.IF DEBUG == 1
+					push eax
+					mov eax, OFFSET CurrentTime_s
+					pop eax
+				.ENDIF			
+				invoke convertTimeToString, position, ADDR CurrentTime_s
+				invoke SetWindowText, CurrentTime, ADDR CurrentTime_s
 				mov edx, position
 				invoke GetPercFromPos, edx
 				invoke SendMessage, Trackbar, TBM_SETPOS, TRUE, eax
@@ -556,13 +582,16 @@ PlayAnotherSong proc uses ecx edx ebx callback:DWORD, hWnd: DWORD
 	invoke GetTotalLength, ADDR totalLen_s, LENGTH totalLen_s
 	invoke StringToInt, ADDR totalLen_s
 	mov	   totalLen, eax
+	invoke convertTimeToString, totalLen, ADDR totalLen_s
+	invoke SetWindowText, TotalTime, ADDR totalLen_s
+	invoke SetWindowText, CurrentTime, ADDR timezero_s
 	;设置音量
 	invoke SetVolume, volume
 	;播放音频
 	invoke PlayAudio
 	mov	AudioOn, 1
 	mov AudioLoaded, 1
-	;开启计时器
+	;开启计时器 
 	invoke SetTimer, hWnd, PlayTimerID, ElapsedTime, NULL
 
 	; 处理callback
@@ -615,5 +644,45 @@ copystring proc uses esi edi source:DWORD, dest:DWORD
 	mov byte ptr [edi], 0
 	ret
 copystring endp
+
+convertTimeToString proc uses edx ecx ebx time:DWORD, time_s:DWORD 
+	mov edx, 0FFFF0000h
+	and edx, time
+	ror edx, 16
+	mov eax, 0FFFFh
+	and eax, time
+	mov ebx, 1000
+	div bx ; 此时ax内存储了时长（单位为秒）
+	mov ebx, 60
+	div bl   ; 此时AL内存储了时长的分钟数，ah内存储了时长的秒数，时长的格式为m:s
+	mov edx, 0FFh
+	and edx, eax
+	pushad
+	invoke IntToString, edx, time_s
+	popad
+	mov edx, 0FFh
+	ror eax, 8
+	and edx, eax
+	mov ecx, time_s
+	dec ecx
+	FindNull:
+		inc ecx
+		cmp byte ptr [ecx], 0
+		jne FindNull
+	mov byte ptr [ecx], ':'
+	inc ecx
+	pushad
+	invoke IntToString, edx, ecx
+	popad
+	mov ecx, time_s
+	dec ecx
+	FindNull2:
+		inc ecx
+		cmp byte ptr [ecx], 0
+		jne FindNull2
+	mov byte ptr [ecx], 0
+	ret
+convertTimeToString endp
+
 
 end start
