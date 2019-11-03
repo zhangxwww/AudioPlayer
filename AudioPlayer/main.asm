@@ -96,6 +96,7 @@ CurrentVolShow  	DWORD 0
 mode                DWORD 0 ; 存储音乐播放模式 ; 0为循环播放; 1为随机播放
 
 
+
 DEBUG           DWORD 1
 
 .data?
@@ -261,7 +262,7 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 		mov  ButtonNextsong, eax
 		;添加播放列表
 		invoke CreateWindowEx, NULL, ADDR ListBoxClassName, NULL, \
-						WS_CHILD or WS_VISIBLE or WS_BORDER or WS_VSCROLL or LBS_NOTIFY,\
+						WS_CHILD or WS_VISIBLE or WS_BORDER or WS_VSCROLL or LBS_NOTIFY or WS_HSCROLL,\
                         20,190,300,200,hWnd,PlayListID,hInstance,NULL
 		mov PlayList, eax
 		;添加进度条
@@ -275,7 +276,9 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                         345,30,30,80,hWnd,SoundbarID,hInstance,NULL
 		mov  Soundbar, eax
 		;初始化音量控制条位置、是否可见
+		pushad
 		invoke SendMessage, Soundbar, TBM_SETPOS, TRUE, 0
+		popad
 		invoke ShowWindow, Soundbar, SW_HIDE
 		;变量初始化
 		mov volume, 1000

@@ -10,3 +10,4 @@ GetTotalLength PROTO returnAddr:DWORD, bufsize:DWORD
 GetVolume PROTO returnAddr:DWORD, bufsize:DWORD
 SetVolume PROTO vol:DWORD
 CloseAudio PROTO
+parseLRC PROTO szLRCFileName:DWORD, timeIntArrayAddr:DWORD, lyricsReturnAddr:DWORD, maxCount:DWORD
