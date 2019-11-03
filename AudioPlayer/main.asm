@@ -75,7 +75,7 @@ LoadFailureText     BYTE "Failed to load the selected audio file!", 0
 maxFileNum          equ 5
 maxFileNameLength   equ 512
 
-szFilter			BYTE "Media Files", 0, "*.mp3;*.wav", 0
+szFilter			BYTE "Media Files", 0, "*.mp3;*.wav;*.m4a", 0
 szFileNameList		BYTE maxFileNum*maxFileNameLength DUP(0) ; 存储列表中的歌曲对应的FileName的数组，最多存maxFileNum个FileName，每个的长度最大为maxFileNameLength
 szFileNameOpen		BYTE maxFileNameLength DUP(0)
 szFileNameToDisplay BYTE maxFileNameLength DUP(0)
