@@ -159,10 +159,12 @@ parseLRC proc uses ebx ecx edx esi edi szLRCFileName:DWORD, timeIntArrayAddr:DWO
 	local Count:DWORD ; 解析的歌词数量
 	local nextLyricPtr:DWORD ; 指向lyricsReturnAddr存储下一个字节的指针
 	;打开文件和初始化
+	mov eax, OFFSET LRC_buffer
+	add eax, LRCBufferSize
+	mov lastBytePosition, eax
 	mov eax, lyricsReturnAddr
 	mov nextLyricPtr, eax
 	mov Count, 0
-	mov lyricsReturnAddr, 0
 	mov edx, szLRCFileName
 	call OpenInputFile
 	mov szLRCFileHandle, eax
@@ -194,7 +196,7 @@ parseLRC proc uses ebx ecx edx esi edi szLRCFileName:DWORD, timeIntArrayAddr:DWO
 			cmp ebx, lastBytePosition
 			ja quit
 			mov eax, [ebx]
-			cmp eax, '['
+			cmp al, '['
 			jne FindNextLeftBracket
 		mov TimeStartPos, ebx
 		; Find next ']' and store its position in TimeEndPos
@@ -203,11 +205,26 @@ parseLRC proc uses ebx ecx edx esi edi szLRCFileName:DWORD, timeIntArrayAddr:DWO
 			inc ecx
 			cmp ecx, lastBytePosition
 			ja quit
-			mov eax, [ebx]
-			cmp eax, ']'
+			mov eax, [ecx]
+			cmp al, ']'
 			jne FindNextRightBracket
 		mov TimeEndPos, ecx
 		; Convert "[mm:ss.ms]"-formatted time to the corresponding value in ms and store the result in timeReturnAddr
+
+		;排除非时间格式的标签
+		mov ebx, TimeStartPos
+		inc ebx
+		mov eax, '0'
+		mov ecx, 10
+		check_is_time:
+			cmp al, byte ptr [ebx]
+			je is_time
+			inc eax
+			loop check_is_time
+		is_not_time:
+			mov ebx, TimeEndPos
+			jmp ParseLoop
+		is_time:
 
 		mov esi, TimeStartPos
 		FindColon:  ; store the position of colon in esi
@@ -215,12 +232,13 @@ parseLRC proc uses ebx ecx edx esi edi szLRCFileName:DWORD, timeIntArrayAddr:DWO
 			cmp esi, lastBytePosition
 			ja quit
 			mov eax, [esi]
-			cmp eax, ':'
+			cmp al, ':'
 			jne FindColon
 		mov byte ptr [esi], 0
+		inc ebx
 		invoke StringToInt, ebx
 		mov minute, ax
-		mov eax, 3600
+		mov eax, 60000
 		mul minute
 		shl edx, 16
 		and eax, 0FFFFh
@@ -234,26 +252,36 @@ parseLRC proc uses ebx ecx edx esi edi szLRCFileName:DWORD, timeIntArrayAddr:DWO
 			cmp esi, lastBytePosition
 			ja quit
 			mov eax, [esi]
-			cmp eax, '.'
+			cmp al, '.'
 			jne FindDot
 		mov byte ptr [esi], 0
+		mov ebx, TimeStartPos
+		FINDNULL_BEFORE_SECOND:
+			inc ebx
+			mov eax, [ebx]
+			cmp al, 0
+			jne FINDNULL_BEFORE_SECOND
+		inc ebx
 		invoke StringToInt, ebx
 		mov second, ax
-		mov eax, 60
-		mul minute
+		mov eax, 1000
+		mul second
 		shl edx, 16
 		and eax, 0FFFFh
 		add eax, edx
 		add time, eax ; change local variable time according to minute
 
-		inc esi
+		FINDNULL_BEFORE_MS:
+			inc ebx
+			mov eax, [ebx]
+			cmp al, 0
+			jne FINDNULL_BEFORE_MS
+		inc ebx
+		mov ecx, TimeEndPos
+		mov byte ptr [ecx], 0
 		invoke StringToInt, ebx
-		mov millisecond, ax
-		mov eax, 60
-		mul millisecond
-		shl edx, 16
-		and eax, 0FFFFh
-		add eax, edx
+		mov ecx, TimeEndPos
+		mov byte ptr [ecx], ']'
 		add time, eax ; change local variable time according to minute
 
 		;修改count和timeIntArrayAddr
@@ -277,25 +305,23 @@ parseLRC proc uses ebx ecx edx esi edi szLRCFileName:DWORD, timeIntArrayAddr:DWO
 		inc esi
 		mov edi, nextLyricPtr
 		L9:
-			mov eax, [esi]
-			cmp eax, 0
+			lodsb
+			cmp al, 0
 			je L10
-			cmp eax, '['
+			cmp al, '['
 			je L10
-			cmp eax, '\r'
+			cmp al, 0ah
 			je L10
-			cmp eax, '\n'
+			cmp al, 0dh
 			je L10
-			mov [edi], eax
-			inc esi
-			inc edi
+			stosb
 			jmp L9
 		L10:
-			mov ecx, 0
-			mov [edi], ecx
-			inc edi
+			mov eax, 0
+			stosb
 			mov nextLyricPtr, edi
 			mov ebx, esi
+			dec ebx
 
 		jmp ParseLoop
 

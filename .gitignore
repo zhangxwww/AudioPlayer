@@ -10,6 +10,8 @@
 *.userosscache
 *.sln.docstates
 
+*.lrc
+
 *.vcxproj
 *.vcxproj.filters
 *.vcxproj.user

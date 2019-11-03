@@ -23,7 +23,7 @@ atodw				proto :DWORD
 StringToInt			equ <atodw>
 dwtoa               proto :DWORD, :DWORD
 IntToString         equ <dwtoa>
-
+WriteString			proto
 include 	\masm32\include\windows.inc
 include 	\masm32\include\user32.inc
 include 	\masm32\include\kernel32.inc
@@ -612,7 +612,7 @@ PlayAnotherSong proc uses ecx edx ebx callback:DWORD, hWnd: DWORD
 		jmp quit
 	.ENDIF
 	;构造lrc结尾的同名歌词文件名
-	invoke copystring, ADDR lyricName, ADDR szFileNameOpen
+	invoke copystring, ADDR szFileNameOpen, ADDR lyricName
 	push eax
 	push ebx
 	push ecx
@@ -634,7 +634,9 @@ PlayAnotherSong proc uses ecx edx ebx callback:DWORD, hWnd: DWORD
 	mov [ebx], edx
 	;获取歌词
 	invoke SetWindowText, LyricList, nullLyricText
-	invoke parseLRC, szFileNameOpen, ADDR lyric_time, ADDR lyric_content, maxLyricNum
+	mov edx, OFFSET lyricName
+	call WriteString
+	invoke parseLRC, ADDR lyricName, ADDR lyric_time, ADDR lyric_content, maxLyricNum
 	mov total_lyric_num, eax
 	pop edx
 	pop ecx
@@ -713,7 +715,7 @@ GetLyricFromPos proc uses eax ebx ecx esi pos:DWORD, res:DWORD
 	mov ecx, 0
 	mov eax, 0
 	mov edx, 0
-	invoke copystring, ebx, res
+	invoke copystring, res, ebx
 	.WHILE ecx < total_lyric_num && eax < pos
 		mov edx, eax
 		lodsd
