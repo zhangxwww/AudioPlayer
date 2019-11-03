@@ -12,12 +12,13 @@ SelectFile			proto										;用于打开文件对话框并存储文件名字符
 GetPosFromPerc		proto perc:DWORD							;用于从百分比获取播放进度
 GetVolumeFromPerc   proto perc:DWORD
 GetPercFromPos		proto pos:DWORD								;用于从进度获取百分比
+GetLyricFromPos		proto pos:DWORD, res:DWORD					;用于根据毫秒播放进度获取当前歌词
 GotoPrevSong        proto :DWORD                                ;播放上一首歌曲
 GotoNextSong        proto :DWORD                                ;播放下一首歌曲
 PlayAnotherSong     proto :DWORD,:DWORD                         ;播放另一首歌曲
 RepaintPlayList     proto		                                ;绘制播放列表
 convertTimeToString proto :DWORD, :DWORD                        ;将ms格式的DWORD类型的时间转换成m:s格式的时间
-copystring          proto :DWORD,:DWORD                      ;将edx内存储的数字转换成字符串
+copystring          proto :DWORD,:DWORD                         ;将edx内存储的数字转换成字符串
 atodw				proto :DWORD								
 StringToInt			equ <atodw>
 dwtoa               proto :DWORD, :DWORD
@@ -71,31 +72,35 @@ ButtonNextsongText  BYTE "Next song", 0
 ButtonPrevsongText  BYTE "Prev song", 0
 LoadFailureTitle    BYTE "Warning", 0
 LoadFailureText     BYTE "Failed to load the selected audio file!", 0
-
+nullLyricText 		BYTE "No lyrics found."
 maxFileNum          equ 5
 maxFileNameLength   equ 512
+maxLyricLength		equ 128
+maxLyricNum			equ 512
 
 szFilter			BYTE "Media Files", 0, "*.mp3;*.wav;*.m4a", 0
 szFileNameList		BYTE maxFileNum*maxFileNameLength DUP(0) ; 存储列表中的歌曲对应的FileName的数组，最多存maxFileNum个FileName，每个的长度最大为maxFileNameLength
 szFileNameOpen		BYTE maxFileNameLength DUP(0)
 szFileNameToDisplay BYTE maxFileNameLength DUP(0)
-szFileNum           DWORD 0 ; 列表中的歌曲数(最大为maxFileNum)
-szFilePos           DWORD 0 ; 正在播放列表的哪一首(若列表中有歌曲，该值最小为1)
+szFileNum           DWORD 0 								 	;列表中的歌曲数(最大为maxFileNum)
+szFilePos           DWORD 0 									;正在播放列表的哪一首(若列表中有歌曲，该值最小为1)
 AudioOn				DWORD 0
 AudioLoaded			DWORD 0
 position_s     		BYTE 64 DUP(0)
 volume_s			BYTE 64 DUP(0)
 totalLen_s     		BYTE 64 DUP(0)
 totalLen			DWORD 0
-CurrentTime_s       BYTE 64 DUP(0) ; 以m:s格式显示的当前已播放的时间
-TotalTime_s         BYTE 64 DUP(0) ; 以m:s格式显示的歌曲总时长
+CurrentTime_s       BYTE 64 DUP(0) 								;以m:s格式显示的当前已播放的时间
+TotalTime_s         BYTE 64 DUP(0) 								;以m:s格式显示的歌曲总时长
 timezero_s          BYTE "0:0", 0
 position			DWORD 0
 volume				DWORD 0
 CurrentVolShow  	DWORD 0
-mode                DWORD 0 ; 存储音乐播放模式 ; 0为循环播放; 1为随机播放
-
-
+mode                DWORD 0 									;存储音乐播放模式，0为循环播放，1为随机播放
+lyric_time			DWORD maxLyricNum DUP(0) 					;存储LRC格式歌词中的毫秒时间点
+lyric_content		BYTE  maxLyricLength*maxLyricNum DUP(0)  	;存储LRC格式歌词中的所有歌词字符串
+current_lyric		BYTE  maxLyricLength DUP(0)					;存储当前歌词
+total_lyric_num		DWORD 0										;歌词的数量
 DEBUG           DWORD 1
 
 .data?
@@ -114,6 +119,7 @@ CurrentTime     HWND ?
 Trackbar		HWND ?
 Soundbar		HWND ?
 PlayList        HWND ?
+LyricList		HWND ?
 
 buffer 		BYTE  512 dup(?)	;缓冲区
 
@@ -131,6 +137,8 @@ ButtonPrevsongID equ 8
 ButtonNextsongID equ 9
 TotalTimeID     equ 10
 CurrentTimeID   equ 11
+LyricListID 	equ 12
+
 totalVolume		equ 1000
 
 IDM_CLEAR 		equ 21
@@ -259,7 +267,11 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                         WS_CHILD or WS_VISIBLE or BS_DEFPUSHBUTTON,\
                         210,150,80,30,hWnd,ButtonNextsongID,hInstance,NULL
 		mov  ButtonNextsong, eax
-		;添加播放列表
+		;添加歌词列表和播放列表
+		invoke CreateWindowEx, NULL, ADDR ListBoxClassName, NULL, \
+						WS_CHILD or WS_VISIBLE or WS_BORDER or WS_VSCROLL or LBS_NOTIFY,\
+                        20,300,300,30,hWnd,LyricListID,hInstance,NULL
+		mov LyricList, eax
 		invoke CreateWindowEx, NULL, ADDR ListBoxClassName, NULL, \
 						WS_CHILD or WS_VISIBLE or WS_BORDER or WS_VSCROLL or LBS_NOTIFY,\
                         20,190,300,200,hWnd,PlayListID,hInstance,NULL
@@ -355,20 +367,30 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 			invoke 	SetVolume, ebx
 		.ELSEIF ax == IDM_UPDATE
 			.IF AudioLoaded == 1
+				;获取进度
 				invoke GetCurrentPosition, ADDR position_s, LENGTH position_s
 				invoke StringToInt, ADDR position_s
 				mov    position, eax
+				;更新当前时间
 				invoke convertTimeToString, position, ADDR CurrentTime_s
 				invoke SetWindowText, CurrentTime, ADDR CurrentTime_s
+				;更新歌词
+				.IF total_lyric_num != 0
+					invoke GetLyricFromPos, position, ADDR current_lyric
+					invoke SetWindowText, LyricList, ADDR current_lyric
+				.ENDIF
+				;设置进度条
 				mov edx, position
 				invoke GetPercFromPos, edx
 				invoke SendMessage, Trackbar, TBM_SETPOS, TRUE, eax
+				;自动切歌
 				mov ebx, position
 				cmp ebx, totalLen
 				jne quit_update
 				invoke GotoNextSong, hWnd
 				quit_update:
 			.ENDIF
+				
 		.ELSEIF ax == IDM_SHOWVOL
 			.IF CurrentVolShow == 0
 				invoke ShowWindow, Soundbar, SW_SHOW
@@ -586,7 +608,12 @@ PlayAnotherSong proc uses ecx edx ebx callback:DWORD, hWnd: DWORD
 		invoke MessageBox, hWnd, ADDR LoadFailureText, ADDR LoadFailureTitle, MB_OK
 		jmp quit
 	.ENDIF
-
+	;获取歌词
+	push eax
+	invoke SetWindowText, LyricList, nullLyricText
+	invoke parseLRC, szFileNameOpen, ADDR lyric_time, ADDR lyric_content, maxLyricNum
+	mov total_lyric_num, eax
+	pop eax
 	;获取总长度
 	invoke GetTotalLength, ADDR totalLen_s, LENGTH totalLen_s
 	invoke StringToInt, ADDR totalLen_s
@@ -653,6 +680,23 @@ copystring proc uses esi edi source:DWORD, dest:DWORD
 	mov byte ptr [edi], 0
 	ret
 copystring endp
+
+GetLyricFromPos proc uses eax, ebx, ecx, esi pos:DWORD, res:DWORD
+	mov ebx, OFFSET lyric_content
+	mov esi, OFFSET lyric_time
+	mov ecx, 0
+	mov eax, 0
+	mov edx, 0
+	invoke copystring, ebx, res
+	.WHILE ecx < total_lyric_num && eax < pos
+		mov edx, eax
+		lodsd
+		add esi, 4
+		add ecx, 4
+	.ENDW
+	add ebx, ecx
+	invoke copystring, ebx, res
+GetLyricFromPos endp
 
 convertTimeToString proc uses edx ecx ebx time:DWORD, time_s:DWORD 
 	mov edx, 0FFFF0000h
