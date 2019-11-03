@@ -332,6 +332,8 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
 			invoke CloseAudio
 			invoke SetWindowText, ButtonPlay, ADDR ButtonPlayText
 			invoke SetWindowText, hwndEdit, NULL
+			invoke SetWindowText, TotalTime, NULL
+			invoke SetWindowText, CurrentTime, NULL
 			mov	szFileNameOpen, NULL
 			mov AudioOn, 0
 			mov AudioLoaded, 0
