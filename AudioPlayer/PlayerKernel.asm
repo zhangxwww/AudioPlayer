@@ -35,6 +35,7 @@ setPosPrefix_s BYTE "seek audio to ", 0
 setPosSuffix_s BYTE 0
 
 LRCBufferSize equ 20000
+lyricLen      equ 128
 
 LRC_buffer     BYTE LRCBufferSize DUP(0)
 
@@ -319,7 +320,9 @@ parseLRC proc uses ebx ecx edx esi edi szLRCFileName:DWORD, timeIntArrayAddr:DWO
 		L10:
 			mov eax, 0
 			stosb
-			mov nextLyricPtr, edi
+			mov ecx, nextLyricPtr
+			add ecx, lyricLen
+			mov nextLyricPtr, ecx
 			mov ebx, esi
 			dec ebx
 

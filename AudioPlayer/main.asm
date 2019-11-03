@@ -24,6 +24,8 @@ StringToInt			equ <atodw>
 dwtoa               proto :DWORD, :DWORD
 IntToString         equ <dwtoa>
 WriteString			proto
+WriteInt			proto
+Crlf				proto
 include 	\masm32\include\windows.inc
 include 	\masm32\include\user32.inc
 include 	\masm32\include\kernel32.inc
@@ -269,9 +271,10 @@ WndProc proc hWnd:HWND, uMsg:UINT, wParam:WPARAM, lParam:LPARAM
                         210,150,80,30,hWnd,ButtonNextsongID,hInstance,NULL
 		mov  ButtonNextsong, eax
 		;添加歌词列表和播放列表
-		invoke CreateWindowEx, NULL, ADDR ListBoxClassName, NULL, \
-						WS_CHILD or WS_VISIBLE or WS_BORDER or WS_VSCROLL or LBS_NOTIFY,\
-                        20,300,300,30,hWnd,LyricListID,hInstance,NULL
+		invoke CreateWindowEx,WS_EX_CLIENTEDGE, ADDR EditClassName,NULL,\
+                        WS_CHILD or WS_VISIBLE or WS_BORDER or ES_LEFT or\
+                        ES_AUTOHSCROLL,\
+                        20,400,300,60,hWnd,LyricListID,hInstance,NULL
 		mov LyricList, eax
 		invoke CreateWindowEx, NULL, ADDR ListBoxClassName, NULL, \
 						WS_CHILD or WS_VISIBLE or WS_BORDER or WS_VSCROLL or LBS_NOTIFY or WS_HSCROLL,\
@@ -633,7 +636,7 @@ PlayAnotherSong proc uses ecx edx ebx callback:DWORD, hWnd: DWORD
 	mov edx, 'c'
 	mov [ebx], edx
 	;获取歌词
-	invoke SetWindowText, LyricList, nullLyricText
+	invoke SetWindowText, LyricList, OFFSET nullLyricText
 	mov edx, OFFSET lyricName
 	call WriteString
 	invoke parseLRC, ADDR lyricName, ADDR lyric_time, ADDR lyric_content, maxLyricNum
@@ -714,16 +717,22 @@ GetLyricFromPos proc uses eax ebx ecx esi pos:DWORD, res:DWORD
 	mov esi, OFFSET lyric_time
 	mov ecx, 0
 	mov eax, 0
-	mov edx, 0
+	mov edx, total_lyric_num
+	shl edx, 2
 	invoke copystring, res, ebx
-	.WHILE ecx < total_lyric_num && eax < pos
-		mov edx, eax
-		lodsd
+	.WHILE ecx <= edx && eax < pos
+		mov eax, [esi]
 		add esi, 4
 		add ecx, 4
 	.ENDW
-	add ebx, ecx
+	sub ecx, 8
+	shr ecx, 2
+	mov eax, ecx
+	mov esi, maxLyricLength
+	mul esi
+	add ebx, eax
 	invoke copystring, ebx, res
+	mov edx, res
 	ret
 GetLyricFromPos endp
 
@@ -736,7 +745,7 @@ convertTimeToString proc uses edx ecx ebx time:DWORD, time_s:DWORD
 	mov ebx, 1000
 	div bx ; 此时ax内存储了时长（单位为秒）
 	mov ebx, 60
-	div bl   ; 此时AL内存储了时长的分钟数，ah内存储了时长的秒数，时长的格式为m:s
+	div bl   ;此时AL内存储了时长的分钟数，ah内存储了时长的秒数，时长的格式为m:s
 	mov edx, 0FFh
 	and edx, eax
 	pushad
