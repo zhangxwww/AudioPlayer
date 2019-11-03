@@ -12,9 +12,11 @@
 
 Win10 + Visual Studio 2019 + masm + Irvine
 
-## 代码说明
+## 提交文件说明
 
 main.asm中实现了GUI窗口，以及各种交互事件的逻辑处理。PlayerKernel.asm中实现了音频与歌词相关的各种操作。cmd.asm是一个命令行版的demo。main.asm与cmd.asm不能同时参与生成。
+
+在ext文件夹中，我们提供了一些可以用来测试的音频文件与歌词文件。当然用其他的文件测试也是可以的。
 
 ## 实现原理
 
